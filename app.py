@@ -115,7 +115,7 @@ def open_sheet():
     client = gspread.authorize(creds)
     return client.open(SHEET_NAME)
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=180, show_spinner=False)  # 3 minutes
 def read_tab(tab_name: str) -> pd.DataFrame:
     sh = open_sheet()  # uses cached resource
     ws = sh.worksheet(tab_name)
@@ -138,10 +138,10 @@ def set_state(sh, key: str, value: str):
 
     if target_row:
         ws.update(f"B{target_row}", [[value]])
-        st.cache_data.clear()
+    
     else:
         ws.append_row([key, value])
-        st.cache_data.clear()
+      
 def toggle_locked(sh):
     new_val = "FALSE" if is_locked() else "TRUE"
     set_state(sh, "locked", new_val)
@@ -150,7 +150,7 @@ def toggle_locked(sh):
 def add_post(sh, player: str, content: str):
     ws = sh.worksheet("posts")
     ws.append_row([utc_iso(), player, content])
-    st.cache_data.clear()
+
     
 def get_posts(sh, limit: int = 100) -> pd.DataFrame:
     df = read_tab("posts")
@@ -242,8 +242,6 @@ def upsert_vote(sh, voter: str, category: str, nominee: str):
     else:
         ws.append_row(row_values)
 
-    st.cache_data.clear()
-
 def compute_superlative_results() -> pd.DataFrame:
     votes = read_tab("votes")
     if votes.empty:
@@ -258,7 +256,7 @@ def compute_superlative_results() -> pd.DataFrame:
 # ----------------------------
 # APP STATE (LOCK)
 # ----------------------------
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=60, show_spinner=False)
 def get_state(key: str, default="FALSE") -> str:
     sh = open_sheet()
     ws = sh.worksheet("app_state")
@@ -341,7 +339,7 @@ def set_bingo_square(sh, player: str, square_id: str, checked: bool):
     else:
         ws.append_row(row_values)
 
-    st.cache_data.clear()
+
 # ----------------------------
 # GUESS SAVE (UPSERT-LIKE)
 # ----------------------------
@@ -366,7 +364,6 @@ def upsert_guess(sh, player: str, giver_guess: str, receiver_guess: str, confide
     else:
         ws.append_row(row_values)
 
-    st.cache_data.clear()
     
 def get_my_guesses(sh, player: str) -> pd.DataFrame:
     df = read_tab("guesses")
