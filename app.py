@@ -70,9 +70,8 @@ def login_panel(sh):
         else:
             st.sidebar.error("Wrong passcode.")
 
-def require_login(sh):
+def require_login():
     if "player" not in st.session_state:
-        login_panel(sh)
         st.info("Log in using the sidebar to play.")
         st.stop()
 
@@ -116,7 +115,7 @@ def get_my_guesses(sh, player: str) -> pd.DataFrame:
 # UI PAGES
 # ----------------------------
 def page_guess_board(sh):
-    require_login(sh)
+    require_login()
     player = st.session_state["player"]
 
     locked = is_locked(sh)
@@ -168,18 +167,21 @@ def page_home(sh):
 # ----------------------------
 sh = open_sheet()
 
-st.sidebar.title("🎄 Navigation")
-if "player" in st.session_state:
-    st.sidebar.success(f"Logged in as: {st.session_state['player']}")
-    if st.sidebar.button("Log out"):
-        st.session_state.clear()
-        st.rerun()
-else:
+st.sidebar.title("🎄 Secret Santa Detective")
+
+# Logged out -> show ONLY login + landing page
+if "player" not in st.session_state:
     login_panel(sh)
+    st.title("🎄 Secret Santa Detective")
+    st.caption("Log in on the left to start guessing.")
+    st.stop()
 
-page = st.sidebar.radio("Go to", ["Home", "Guess Board"], index=1)
+# Logged in -> show nav + pages
+st.sidebar.success(f"Logged in as: {st.session_state['player']}")
+if st.sidebar.button("Log out"):
+    st.session_state.clear()
+    st.rerun()
 
+page = st.sidebar.radio("Go to", ["Guess Board"], index=0)
 if page == "Guess Board":
     page_guess_board(sh)
-else:
-    page_home(sh)
