@@ -15,7 +15,7 @@ SHEET_NAME = "secret-santa-data"  # your exact sheet title
 # ----------------------------
 BINGO_PEOPLE = [
     "Montse", "Alejandro", "Diego",
-    "Gabby", "Alvaro", "Mauricio,
+    "Gabby", "Alvaro", "Mauricio",
     "Bennett", "Luzma", "Cesar"
 ]
 @st.cache_resource
