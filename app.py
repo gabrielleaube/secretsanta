@@ -15,6 +15,31 @@ st.set_page_config(
 )
 st.markdown("""
 <style>
+.podium-wrap{max-width:920px;margin:0 auto;}
+.podium{display:flex;gap:14px;align-items:flex-end;justify-content:center;margin:18px 0 6px 0;}
+.pcol{flex:1;min-width:0}
+.pcard{
+  border-radius:18px;padding:14px 14px 12px 14px;
+  border:1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.03);
+  text-align:center;
+}
+.pname{font-weight:900;font-size:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pscore{font-size:34px;font-weight:900;margin-top:4px;}
+.prank{opacity:.75;font-size:13px;margin-top:6px;}
+.bar{border-radius:18px 18px 6px 6px; margin-top:10px; border:1px solid rgba(255,255,255,0.18);
+     background: rgba(255,255,255,0.05);}
+.bar.one{height:220px;}
+.bar.two{height:160px;}
+.bar.three{height:130px;}
+@media (max-width: 768px){
+  .podium{flex-direction:column;align-items:stretch}
+  .bar.one,.bar.two,.bar.three{height:72px;}
+}
+</style>
+""", unsafe_allow_html=True)
+st.markdown("""
+<style>
 @media (max-width: 768px) {
   section.main > div { padding-left: 0.8rem; padding-right: 0.8rem; }
   .stButton button { padding: 0.8rem 1rem; font-size: 1.05rem; border-radius: 14px; }
@@ -135,7 +160,60 @@ def get_posts(sh, limit: int = 100) -> pd.DataFrame:
     if "timestamp" in df.columns:
         df = df.sort_values("timestamp", ascending=False)
     return df.head(limit)
-    
+def get_assignments_df() -> pd.DataFrame:
+    df = read_tab("assignments")
+    # expects receiver, giver
+    if df.empty:
+        return df
+    df["receiver"] = df["receiver"].astype(str).str.strip()
+    df["giver"] = df["giver"].astype(str).str.strip()
+    return df
+
+def compute_scores() -> pd.DataFrame:
+    guesses = read_tab("guesses")
+    assign = get_assignments_df()
+    players = read_tab("players")
+
+    if guesses.empty or assign.empty or players.empty:
+        return pd.DataFrame(columns=["player", "correct", "total", "accuracy"])
+
+    # normalize
+    for col in ["player", "giver_guess", "receiver_guess"]:
+        guesses[col] = guesses[col].astype(str).str.strip()
+
+    # For each player+receiver, keep the most recent guess (prevents double counting)
+    if "timestamp" in guesses.columns:
+        guesses = guesses.sort_values("timestamp").drop_duplicates(
+            subset=["player", "receiver_guess"], keep="last"
+        )
+
+    # join guesses to truth on receiver
+    merged = guesses.merge(assign, left_on="receiver_guess", right_on="receiver", how="left")
+
+    # correct if giver_guess == true giver
+    merged["is_correct"] = merged["giver_guess"].fillna("") == ""
+
+    # if receiver not found in assignments, treat as not scorable
+    merged["is_scorable"] = merged["giver"].notna()
+    merged["is_correct"] = merged["is_scorable"] & (merged["giver_guess"] == merged["giver"])
+
+    # score by player
+    score = merged.groupby("player").agg(
+        correct=("is_correct", "sum"),
+        total=("is_scorable", "sum")
+    ).reset_index()
+
+    score["accuracy"] = score.apply(lambda r: (r["correct"] / r["total"]) if r["total"] else 0.0, axis=1)
+
+    # include players with 0s
+    all_names = players["name"].astype(str).str.strip().unique().tolist()
+    score = pd.DataFrame({"player": all_names}).merge(score, on="player", how="left").fillna(0)
+    score["correct"] = score["correct"].astype(int)
+    score["total"] = score["total"].astype(int)
+
+    # rank
+    score = score.sort_values(["correct", "accuracy"], ascending=[False, False]).reset_index(drop=True)
+    return score
 # ----------------------------
 # APP STATE (LOCK)
 # ----------------------------
@@ -151,7 +229,11 @@ def get_state(key: str, default="FALSE") -> str:
 def is_locked() -> bool:
     return get_state("locked", "FALSE").upper() == "TRUE"
 
+def reveal_scores_on() -> bool:
+    return get_state("reveal_scores", "FALSE").upper() == "TRUE"
 
+def set_reveal_scores(sh, val: bool):
+    set_state(sh, "reveal_scores", "TRUE" if val else "FALSE")
 # ----------------------------
 # AUTH
 # ----------------------------
@@ -274,6 +356,15 @@ def page_admin(sh):
         new_val = toggle_locked(sh)
         st.success(f"Locked set to {new_val}")
         st.rerun()
+    
+    st.subheader("🏁 End Game")
+    reveal_now = reveal_scores_on()
+    st.write(f"Reveal scores: **{reveal_now}**")
+
+    if st.button("Toggle Reveal Scores"):
+        set_reveal_scores(sh, not reveal_now)
+        st.success("Updated reveal_scores ✅")
+        st.rerun()
 
     st.divider()
     st.caption("When locked is TRUE, nobody can save or edit guesses.")
@@ -372,6 +463,94 @@ def page_clue_wall(sh):
             if ts.strip():
                 st.caption(ts)
             st.write(text)
+def page_leaderboard():
+    require_login()
+    st.title("🏆 Leaderboard")
+
+    if not reveal_scores_on():
+        st.info("Scores are hidden until the host reveals them.")
+        st.stop()
+
+    scores = compute_scores()
+    if scores.empty:
+        st.warning("No scores yet. Make sure `assignments` is filled and guesses exist.")
+        st.stop()
+
+    top = scores.head(3)
+    # pad if fewer than 3
+    while len(top) < 3:
+        top = pd.concat([top, pd.DataFrame([{"player":"—", "correct":0, "total":0, "accuracy":0.0}])], ignore_index=True)
+
+    first, second, third = top.iloc[0], top.iloc[1], top.iloc[2]
+
+    st.markdown('<div class="podium-wrap">', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="podium">
+      <div class="pcol">
+        <div class="pcard">
+          <div class="pname">🥈 {name}</div>
+          <div class="pscore">{score}</div>
+          <div class="prank">{acc}</div>
+        </div>
+        <div class="bar two"></div>
+      </div>
+      <div class="pcol">
+        <div class="pcard">
+          <div class="pname">🥇 {name}</div>
+          <div class="pscore">{score}</div>
+          <div class="prank">{acc}</div>
+        </div>
+        <div class="bar one"></div>
+      </div>
+      <div class="pcol">
+        <div class="pcard">
+          <div class="pname">🥉 {name}</div>
+          <div class="pscore">{score}</div>
+          <div class="prank">{acc}</div>
+        </div>
+        <div class="bar three"></div>
+      </div>
+    </div>
+    """.format(
+        name=second["player"], score=int(second["correct"]),
+        acc=f"{int(round(second['accuracy']*100))}% accuracy" if int(second["total"]) else "—"
+    ) + "" , unsafe_allow_html=True)
+
+    # The above format call only filled second; easiest is to render 3 separately:
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Render properly (simple approach)
+    st.markdown('<div class="podium-wrap">', unsafe_allow_html=True)
+    st.markdown('<div class="podium">', unsafe_allow_html=True)
+
+    def podium_col(emoji, row, bar_class):
+        name = row["player"]
+        score = int(row["correct"])
+        acc = f"{int(round(row['accuracy']*100))}% accuracy" if int(row["total"]) else "—"
+        st.markdown(f"""
+        <div class="pcol">
+          <div class="pcard">
+            <div class="pname">{emoji} {name}</div>
+            <div class="pscore">{score}</div>
+            <div class="prank">{acc}</div>
+          </div>
+          <div class="bar {bar_class}"></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # order: 2nd, 1st, 3rd for classic podium look
+    podium_col("🥈", second, "two")
+    podium_col("🥇", first, "one")
+    podium_col("🥉", third, "three")
+
+    st.markdown("</div></div>", unsafe_allow_html=True)
+
+    st.divider()
+    st.subheader("Full Rankings")
+    show = scores.copy()
+    show["accuracy"] = (show["accuracy"] * 100).round(0).astype(int).astype(str) + "%"
+    st.dataframe(show[["player", "correct", "total", "accuracy"]], hide_index=True, use_container_width=True)
+
 
 def page_bingo(sh):
     require_login()
@@ -457,12 +636,15 @@ if st.sidebar.button("Log out", use_container_width=True):
     st.session_state.clear()
     st.rerun()
 
-page = st.sidebar.radio("Go to", ["Guess Board", "Bingo", "Clue Wall", "Admin"], index=0)
+page = st.sidebar.radio("Go to", ["Guess Board", "Bingo", "Clue Wall", "Leaderboard", "Admin"], index=0)
+
 if page == "Guess Board":
     page_guess_board(sh)
 elif page == "Bingo":
     page_bingo(sh)
 elif page == "Clue Wall":
     page_clue_wall(sh)
+elif page == "Leaderboard":
+    page_leaderboard()
 else:
     page_admin(sh)
