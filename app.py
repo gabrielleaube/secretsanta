@@ -5,7 +5,7 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Sheets Test", page_icon="✅", layout="centered")
 
-SHEET_NAME = "Secret Santa Detective"  # MUST match your Google Sheet title exactly
+SHEET_NAME = "secret-santa-data"  # MUST match your Google Sheet title exactly
 
 @st.cache_resource
 def open_sheet():
