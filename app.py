@@ -7,7 +7,23 @@ from datetime import datetime, timezone
 # ----------------------------
 # CONFIG
 # ----------------------------
-st.set_page_config(page_title="Secret Santa Detective", page_icon="🎄", layout="wide")
+st.set_page_config(
+    page_title="Secret Santa Detective",
+    page_icon="🎄",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+st.markdown("""
+<style>
+@media (max-width: 768px) {
+  section.main > div { padding-left: 0.8rem; padding-right: 0.8rem; }
+  .stButton button { padding: 0.8rem 1rem; font-size: 1.05rem; border-radius: 14px; }
+  .stTextInput input { font-size: 1.05rem; }
+  .stSelectbox div[data-baseweb="select"] > div { font-size: 1.05rem; }
+  .stCheckbox label { font-size: 1.05rem; }
+}
+</style>
+""", unsafe_allow_html=True)
 SHEET_NAME = "secret-santa-data"  # your exact sheet title
 
 st.markdown("""
@@ -151,7 +167,7 @@ def login_panel(sh):
     name = st.sidebar.selectbox("Your name", names, key="login_name")
     code = st.sidebar.text_input("Passcode", type="password", key="login_code")
 
-    if st.sidebar.button("Log in"):
+    if st.sidebar.button("Log in",use_container_width=True):
         ok = not players[(players["name"] == name) & (players["passcode"] == code)].empty
         if ok:
             st.session_state["player"] = name
@@ -254,7 +270,7 @@ def page_admin(sh):
     locked_now = is_locked()
     st.write(f"Current lock status: **{'LOCKED 🔒' if locked_now else 'UNLOCKED ✅'}**")
 
-    if st.button("Toggle Lock"):
+    if st.button("Toggle Lock", use_container_width=True):
         new_val = toggle_locked(sh)
         st.success(f"Locked set to {new_val}")
         st.rerun()
@@ -364,6 +380,8 @@ def page_bingo(sh):
     st.title("🎯 Bingo")
     st.caption("Stamp squares as you figure things out during gift opening.")
 
+    compact = st.toggle("📱 Phone-friendly view", value=True)
+    cols_n = 1 if compact else 3
     # header B I N G O
     st.markdown("""
     <div class="bingo-header">
@@ -377,13 +395,13 @@ def page_bingo(sh):
 
     # 3x3 grid (row-major)
     for r in range(3):
-        cols = st.columns(3)
+        cols = st.columns(cols_n)
         for c in range(3):
             idx = r*3 + c
             person = BINGO_PEOPLE[idx]
             stamped = state.get(person, False)
 
-            with cols[c]:
+            with cols[c % cols_n]:
                 # Square “card” look
                 cls = "square stamped" if stamped else "square"
                 st.markdown(
@@ -435,7 +453,7 @@ if "player" not in st.session_state:
 
 # Logged in -> show nav + pages
 st.sidebar.success(f"Logged in as: {st.session_state['player']}")
-if st.sidebar.button("Log out"):
+if st.sidebar.button("Log out", use_container_width=True):
     st.session_state.clear()
     st.rerun()
 
