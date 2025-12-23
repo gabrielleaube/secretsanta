@@ -34,11 +34,16 @@ try:
     st.dataframe(df, hide_index=True, use_container_width=True)
 
 except Exception as e:
+    import traceback
     st.error("Connection failed ❌")
-    st.write("Most common causes:")
-    st.write("• Sheet not shared with the service account email (Editor)")
-    st.write("• SHEET_NAME mismatch (must match title exactly)")
-    st.write("• Secrets formatting issue")
-    st.write("Error details:")
-    st.code(str(e))
+
+    st.subheader("Debug")
+    st.code(repr(e))  # shows the exception type/details
+    st.code(traceback.format_exc())  # full traceback
+
+    # If it's a gspread APIError, it often has a .response with useful JSON/text
+    resp = getattr(e, "response", None)
+    if resp is not None:
+        st.subheader("Raw response text")
+        st.code(getattr(resp, "text", str(resp)))
 
