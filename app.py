@@ -2,11 +2,17 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import datetime, timezone
 
-st.set_page_config(page_title="Sheets Test", page_icon="✅", layout="centered")
+# ----------------------------
+# CONFIG
+# ----------------------------
+st.set_page_config(page_title="Secret Santa Detective", page_icon="🎄", layout="wide")
+SHEET_NAME = "secret-santa-data"  # your exact sheet title
 
-SHEET_NAME = "secret-santa-data"  # MUST match your Google Sheet title exactly
-
+# ----------------------------
+# SHEETS CONNECT
+# ----------------------------
 @st.cache_resource
 def open_sheet():
     scopes = [
@@ -20,30 +26,160 @@ def open_sheet():
     client = gspread.authorize(creds)
     return client.open(SHEET_NAME)
 
-st.title("✅ Google Sheets Connection Test")
+def ws_df(sh, tab_name: str) -> pd.DataFrame:
+    ws = sh.worksheet(tab_name)
+    return pd.DataFrame(ws.get_all_records())
 
-try:
-    sh = open_sheet()
-    st.success("Connected to your Google Sheet ✅")
+def utc_iso():
+    return datetime.now(timezone.utc).isoformat()
 
-    # Read players tab
-    ws = sh.worksheet("players")
-    df = pd.DataFrame(ws.get_all_records())
+# ----------------------------
+# APP STATE (LOCK)
+# ----------------------------
+def get_state(sh, key: str, default="FALSE") -> str:
+    ws = sh.worksheet("app_state")
+    rows = ws.get_all_records()
+    for r in rows:
+        if str(r.get("key", "")).strip().lower() == key.lower():
+            return str(r.get("value", default)).strip()
+    return default
 
-    st.subheader("players tab preview")
-    st.dataframe(df, hide_index=True, use_container_width=True)
+def is_locked(sh) -> bool:
+    return get_state(sh, "locked", "FALSE").upper() == "TRUE"
 
-except Exception as e:
-    import traceback
-    st.error("Connection failed ❌")
+# ----------------------------
+# AUTH
+# ----------------------------
+def login_panel(sh):
+    st.sidebar.header("🔐 Login")
+    players = ws_df(sh, "players")
+    if players.empty:
+        st.sidebar.error("Your 'players' tab is empty.")
+        return
 
-    st.subheader("Debug")
-    st.code(repr(e))  # shows the exception type/details
-    st.code(traceback.format_exc())  # full traceback
+    names = players["name"].tolist()
+    name = st.sidebar.selectbox("Your name", names)
+    code = st.sidebar.text_input("Passcode", type="password")
 
-    # If it's a gspread APIError, it often has a .response with useful JSON/text
-    resp = getattr(e, "response", None)
-    if resp is not None:
-        st.subheader("Raw response text")
-        st.code(getattr(resp, "text", str(resp)))
+    if st.sidebar.button("Log in"):
+        ok = not players[(players["name"] == name) & (players["passcode"] == code)].empty
+        if ok:
+            st.session_state["player"] = name
+            st.toast(f"Welcome, {name} 🎄", icon="🎄")
+            st.rerun()
+        else:
+            st.sidebar.error("Wrong passcode.")
 
+def require_login(sh):
+    if "player" not in st.session_state:
+        login_panel(sh)
+        st.info("Log in using the sidebar to play.")
+        st.stop()
+
+# ----------------------------
+# GUESS SAVE (UPSERT-LIKE)
+# ----------------------------
+def upsert_guess(sh, player: str, giver_guess: str, receiver_guess: str, confidence: int, reason: str):
+    """
+    Overwrite player's guess for a given receiver_guess if it exists.
+    Otherwise append a new row.
+    """
+    ws = sh.worksheet("guesses")
+    records = ws.get_all_records()
+
+    # find existing row index (2-based in Sheets because row 1 is headers)
+    target_row = None
+    for i, r in enumerate(records, start=2):
+        if str(r.get("player", "")).strip() == player and str(r.get("receiver_guess", "")).strip() == receiver_guess:
+            target_row = i
+            break
+
+    row_values = [utc_iso(), player, giver_guess, receiver_guess, int(confidence), reason]
+
+    if target_row:
+        # update the whole row A:F
+        ws.update(f"A{target_row}:F{target_row}", [row_values])
+    else:
+        ws.append_row(row_values)
+
+def get_my_guesses(sh, player: str) -> pd.DataFrame:
+    df = ws_df(sh, "guesses")
+    if df.empty:
+        return df
+    df = df[df["player"] == player].copy()
+    # latest first
+    if "timestamp" in df.columns:
+        df = df.sort_values("timestamp", ascending=False)
+    return df
+
+# ----------------------------
+# UI PAGES
+# ----------------------------
+def page_guess_board(sh):
+    require_login(sh)
+    player = st.session_state["player"]
+
+    locked = is_locked(sh)
+    st.title("🎁 Guess Board")
+    if locked:
+        st.error("Guesses are LOCKED 🔒 (no more edits)")
+    else:
+        st.caption("Submit your guesses. You can edit until the host locks the game.")
+
+    players_df = ws_df(sh, "players")
+    names = players_df["name"].tolist()
+
+    st.subheader("Make a guess")
+    col1, col2, col3 = st.columns([1, 1, 1])
+
+    with col1:
+        giver_guess = st.selectbox("I think the Secret Santa is…", names, index=0, disabled=locked)
+    with col2:
+        receiver_guess = st.selectbox("…for this person:", names, index=0, disabled=locked)
+    with col3:
+        confidence = st.slider("Confidence", 1, 5, 3, disabled=locked)
+
+    reason = st.text_input("Reason (optional)", placeholder="e.g., They were being suspicious at dinner", disabled=locked)
+
+    if st.button("Save / Update Guess", disabled=locked):
+        if giver_guess == receiver_guess:
+            st.warning("That guess is… chaotic. You can do it, but are you sure? 😭")
+        upsert_guess(sh, player, giver_guess, receiver_guess, confidence, reason)
+        st.success("Saved ✅")
+        st.rerun()
+
+    st.divider()
+    st.subheader("My saved guesses")
+    mine = get_my_guesses(sh, player)
+    if mine.empty:
+        st.write("No guesses yet.")
+    else:
+        show_cols = [c for c in ["timestamp", "giver_guess", "receiver_guess", "confidence", "reason"] if c in mine.columns]
+        st.dataframe(mine[show_cols], hide_index=True, use_container_width=True)
+
+def page_home(sh):
+    st.title("🎄 Secret Santa Detective")
+    st.write("Pick a page on the left to start.")
+    st.write("Current status:")
+    st.write(f"- Locked: **{is_locked(sh)}**")
+
+# ----------------------------
+# MAIN
+# ----------------------------
+sh = open_sheet()
+
+st.sidebar.title("🎄 Navigation")
+if "player" in st.session_state:
+    st.sidebar.success(f"Logged in as: {st.session_state['player']}")
+    if st.sidebar.button("Log out"):
+        st.session_state.clear()
+        st.rerun()
+else:
+    login_panel(sh)
+
+page = st.sidebar.radio("Go to", ["Home", "Guess Board"], index=1)
+
+if page == "Guess Board":
+    page_guess_board(sh)
+else:
+    page_home(sh)
