@@ -26,8 +26,9 @@ def open_sheet():
     client = gspread.authorize(creds)
     return client.open(SHEET_NAME)
 
-@st.cache_data(ttl=15)  # cache for 15 seconds
-def read_tab(sh, tab_name: str) -> pd.DataFrame:
+@st.cache_data(ttl=15)
+def read_tab(tab_name: str) -> pd.DataFrame:
+    sh = open_sheet()  # uses cached resource
     ws = sh.worksheet(tab_name)
     return pd.DataFrame(ws.get_all_records())
     
@@ -53,7 +54,7 @@ def set_state(sh, key: str, value: str):
         ws.append_row([key, value])
         st.cache_data.clear()
 def toggle_locked(sh):
-    new_val = "FALSE" if is_locked(sh) else "TRUE"
+    new_val = "FALSE" if is_locked() else "TRUE"
     set_state(sh, "locked", new_val)
     return new_val
 
@@ -63,7 +64,7 @@ def add_post(sh, player: str, content: str):
     st.cache_data.clear()
     
 def get_posts(sh, limit: int = 100) -> pd.DataFrame:
-    df = read_tab(sh,"posts")
+    df = read_tab("posts")
     if df.empty:
         return df
     # newest first if timestamp exists
@@ -75,30 +76,31 @@ def get_posts(sh, limit: int = 100) -> pd.DataFrame:
 # APP STATE (LOCK)
 # ----------------------------
 @st.cache_data(ttl=10)
-def get_state(sh, key: str, default="FALSE") -> str:
+def get_state(key: str, default="FALSE") -> str:
+    sh = open_sheet()
     ws = sh.worksheet("app_state")
     rows = ws.get_all_records()
     for r in rows:
         if str(r.get("key", "")).strip().lower() == key.lower():
             return str(r.get("value", default)).strip()
     return default
+def is_locked() -> bool:
+    return get_state("locked", "FALSE").upper() == "TRUE"
 
-def is_locked(sh) -> bool:
-    return get_state(sh, "locked", "FALSE").upper() == "TRUE"
 
 # ----------------------------
 # AUTH
 # ----------------------------
 def login_panel(sh):
     st.sidebar.header("🔐 Login")
-    players = read_tab(sh, "players")
+    players = read_tab("players")
     if players.empty:
         st.sidebar.error("Your 'players' tab is empty.")
         return
 
     names = players["name"].tolist()
-    name = st.sidebar.selectbox("Your name", names)
-    code = st.sidebar.text_input("Passcode", type="password")
+    anonymous = st.checkbox("Post anonymous", value=False, key="post_anon")
+    content = st.text_input("Your clue / theory", placeholder="Clue: My santa secret loves shrimp", key="post_content")
 
     if st.sidebar.button("Log in"):
         ok = not players[(players["name"] == name) & (players["passcode"] == code)].empty
@@ -118,32 +120,30 @@ def require_login():
 # GUESS SAVE (UPSERT-LIKE)
 # ----------------------------
 def upsert_guess(sh, player: str, giver_guess: str, receiver_guess: str, confidence: int, reason: str):
-    """
-    Overwrite player's guess for a given receiver_guess if it exists.
-    Otherwise append a new row.
-    """
     ws = sh.worksheet("guesses")
-    records = ws.get_all_records()
 
-    # find existing row index (2-based in Sheets because row 1 is headers)
+    # Use cached guesses to find row (avoids extra API read)
+    df = read_tab("guesses")
+
     target_row = None
-    for i, r in enumerate(records, start=2):
-        if str(r.get("player", "")).strip() == player and str(r.get("receiver_guess", "")).strip() == receiver_guess:
-            target_row = i
-            break
+    if not df.empty:
+        match = df[(df["player"] == player) & (df["receiver_guess"] == receiver_guess)]
+        if not match.empty:
+            # find the row index in the sheet: header is row 1, df row 0 corresponds to sheet row 2
+            df_index = match.index[0]
+            target_row = int(df_index) + 2
 
     row_values = [utc_iso(), player, giver_guess, receiver_guess, int(confidence), reason]
 
     if target_row:
-        # update the whole row A:F
         ws.update(f"A{target_row}:F{target_row}", [row_values])
-        st.cache_data.clear()
     else:
         ws.append_row(row_values)
-        st.cache_data.clear()
 
+    st.cache_data.clear()
+    
 def get_my_guesses(sh, player: str) -> pd.DataFrame:
-    df = read_tab(sh, "guesses")
+    df = read_tab("guesses")
     if df.empty:
         return df
     df = df[df["player"] == player].copy()
@@ -159,7 +159,7 @@ def page_home(sh):
     st.title("🎄 Secret Santa Detective")
     st.write("Pick a page on the left to start.")
     st.write("Current status:")
-    st.write(f"- Locked: **{is_locked(sh)}**")
+    st.write(f"- Locked: **{is_locked()}**")
 
 def page_admin(sh):
     require_login()
@@ -170,7 +170,7 @@ def page_admin(sh):
         st.info("Enter the admin code to unlock admin controls.")
         return
 
-    locked_now = is_locked(sh)
+    locked_now = is_locked()
     st.write(f"Current lock status: **{'LOCKED 🔒' if locked_now else 'UNLOCKED ✅'}**")
 
     if st.button("Toggle Lock"):
@@ -185,14 +185,14 @@ def page_guess_board(sh):
     require_login()
     player = st.session_state["player"]
 
-    locked = is_locked(sh)
+    locked = is_locked()
     st.title("🎁 Guess Board 🎁 ")
     if locked:
         st.error("Guesses are LOCKED 🔒 (no more edits)")
     else:
         st.caption("Submit your guesses. You can edit until the host locks the game.")
 
-    players_df = read_tab(sh, "players")
+    players_df = read_tab("players")
     names = players_df["name"].tolist()
 
     st.subheader("Make a guess")
@@ -233,7 +233,7 @@ def page_clue_wall(sh):
     st.title("🕵️ Clue Wall")
     st.caption("Drop clues, theories, and chaotic accusations. Keep it fun 😈")
 
-    locked = is_locked(sh)
+    locked = is_locked()
     if locked:
         st.warning("Guesses are locked, but you can still post clues.")
 
