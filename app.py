@@ -214,6 +214,47 @@ def compute_scores() -> pd.DataFrame:
     # rank
     score = score.sort_values(["correct", "accuracy"], ascending=[False, False]).reset_index(drop=True)
     return score
+
+def get_active_superlatives() -> pd.DataFrame:
+    df = read_tab("superlatives")
+    if df.empty:
+        return df
+    df["active"] = df["active"].astype(str).str.upper()
+    df = df[df["active"] == "TRUE"].copy()
+    return df
+
+def upsert_vote(sh, voter: str, category: str, nominee: str):
+    ws = sh.worksheet("votes")
+    df = read_tab("votes")
+
+    target_row = None
+    if not df.empty:
+        df["voter"] = df["voter"].astype(str).str.strip()
+        df["category"] = df["category"].astype(str).str.strip()
+        match = df[(df["voter"] == voter) & (df["category"] == category)]
+        if not match.empty:
+            target_row = int(match.index[0]) + 2
+
+    row_values = [utc_iso(), voter, category, nominee]
+
+    if target_row:
+        ws.update(f"A{target_row}:D{target_row}", [row_values])
+    else:
+        ws.append_row(row_values)
+
+    st.cache_data.clear()
+
+def compute_superlative_results() -> pd.DataFrame:
+    votes = read_tab("votes")
+    if votes.empty:
+        return pd.DataFrame(columns=["category", "nominee", "votes"])
+
+    votes["category"] = votes["category"].astype(str).str.strip()
+    votes["nominee"] = votes["nominee"].astype(str).str.strip()
+
+    res = votes.groupby(["category", "nominee"]).size().reset_index(name="votes")
+    res = res.sort_values(["category", "votes"], ascending=[True, False]).reset_index(drop=True)
+    return res
 # ----------------------------
 # APP STATE (LOCK)
 # ----------------------------
@@ -234,6 +275,12 @@ def reveal_scores_on() -> bool:
 
 def set_reveal_scores(sh, val: bool):
     set_state(sh, "reveal_scores", "TRUE" if val else "FALSE")
+    
+def reveal_superlatives_on() -> bool:
+    return get_state("reveal_superlatives", "FALSE").upper() == "TRUE"
+
+def set_reveal_superlatives(sh, val: bool):
+    set_state(sh, "reveal_superlatives", "TRUE" if val else "FALSE")
 # ----------------------------
 # AUTH
 # ----------------------------
@@ -364,6 +411,15 @@ def page_admin(sh):
     if st.button("Toggle Reveal Scores"):
         set_reveal_scores(sh, not reveal_now)
         st.success("Updated reveal_scores ✅")
+        st.rerun()
+        
+    st.subheader("😈 Superlatives")
+    show_now = reveal_superlatives_on()
+    st.write(f"Reveal superlatives: **{show_now}**")
+
+    if st.button("Toggle Reveal Superlatives"):
+        set_reveal_superlatives(sh, not show_now)
+        st.success("Updated reveal_superlatives ✅")
         st.rerun()
 
     st.divider()
@@ -551,7 +607,78 @@ def page_leaderboard():
     show["accuracy"] = (show["accuracy"] * 100).round(0).astype(int).astype(str) + "%"
     st.dataframe(show[["player", "correct", "total", "accuracy"]], hide_index=True, use_container_width=True)
 
+def page_superlatives(sh):
+    require_login()
+    voter = st.session_state["player"]
 
+    st.title("😈 Family Superlatives")
+    st.caption("Vote anonymously. You can change your vote anytime until results are revealed.")
+
+    cats = get_active_superlatives()
+    players = read_tab("players")
+    names = players["name"].astype(str).str.strip().tolist() if not players.empty else []
+
+    if cats.empty:
+        st.warning("No active superlatives yet. Add rows in the `superlatives` tab and set active=TRUE.")
+        return
+    if not names:
+        st.warning("Players list is empty.")
+        return
+
+    # --- Voting section
+    st.subheader("Cast your votes")
+    with st.form("superlatives_form"):
+        choices = {}
+        for _, row in cats.iterrows():
+            cat = str(row["category"])
+            prompt = str(row.get("prompt", cat))
+            # default to blank choice
+            choices[cat] = st.selectbox(prompt, ["(choose)"] + names, key=f"vote_{cat}")
+
+        submitted = st.form_submit_button("Submit votes", use_container_width=True)
+
+    if submitted:
+        for cat, nominee in choices.items():
+            if nominee != "(choose)":
+                upsert_vote(sh, voter, cat, nominee)
+        st.success("Votes saved ✅ (anonymous)")
+        st.rerun()
+
+    st.divider()
+
+    # --- Results section (hidden until reveal)
+    st.subheader("Results")
+    if not reveal_superlatives_on():
+        st.info("Results are hidden until the host reveals them.")
+        return
+
+    res = compute_superlative_results()
+    if res.empty:
+        st.write("No votes yet.")
+        return
+
+    # winner per category
+    winners = res.sort_values(["category", "votes"], ascending=[True, False]).drop_duplicates("category")
+
+    # pretty winner cards
+    for _, w in winners.iterrows():
+        cat = w["category"]
+        nominee = w["nominee"]
+        v = int(w["votes"])
+        st.markdown(f"""
+        <div style="border:1px solid rgba(255,255,255,0.18); border-radius:18px; padding:14px; margin:10px 0;
+                    background: rgba(255,255,255,0.03);">
+          <div style="font-weight:900; font-size:18px;">🏅 {cat}</div>
+          <div style="font-size:22px; font-weight:900; margin-top:6px;">{nominee}</div>
+          <div style="opacity:.8; margin-top:6px;">Votes: <b>{v}</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # breakdown table for that category
+        with st.expander(f"See full votes for {cat}"):
+            sub = res[res["category"] == cat].copy()
+            st.dataframe(sub[["nominee", "votes"]], hide_index=True, use_container_width=True)
+            
 def page_bingo(sh):
     require_login()
     player = st.session_state["player"]
@@ -636,7 +763,11 @@ if st.sidebar.button("Log out", use_container_width=True):
     st.session_state.clear()
     st.rerun()
 
-page = st.sidebar.radio("Go to", ["Guess Board", "Bingo", "Clue Wall", "Leaderboard", "Admin"], index=0)
+page = st.sidebar.radio(
+    "Go to",
+    ["Guess Board", "Bingo", "Clue Wall", "Leaderboard", "Superlatives", "Admin"],
+    index=0
+)
 
 if page == "Guess Board":
     page_guess_board(sh)
@@ -646,5 +777,7 @@ elif page == "Clue Wall":
     page_clue_wall(sh)
 elif page == "Leaderboard":
     page_leaderboard()
+elif page == "Superlatives":
+    page_superlatives(sh)
 else:
     page_admin(sh)
