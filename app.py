@@ -13,6 +13,11 @@ SHEET_NAME = "secret-santa-data"  # your exact sheet title
 # ----------------------------
 # SHEETS CONNECT
 # ----------------------------
+BINGO_PEOPLE = [
+    "Montse", "Alejandro", "Diego",
+    "Gabby", "Alvaro", "Mauricio,
+    "Bennett", "Luzma", "Cesar"
+]
 @st.cache_resource
 def open_sheet():
     scopes = [
@@ -116,7 +121,39 @@ def require_login():
     if "player" not in st.session_state:
         st.info("Log in using the sidebar to play.")
         st.stop()
+def get_bingo_state(player: str) -> dict:
+    df = read_tab("bingo")
+    state = {person: False for person in BINGO_PEOPLE}
 
+    if df.empty:
+        return state
+
+    mine = df[df["player"] == player]
+    for _, r in mine.iterrows():
+        sid = str(r.get("square_id", "")).strip()
+        chk = str(r.get("checked", "FALSE")).upper() == "TRUE"
+        if sid in state:
+            state[sid] = chk
+    return state
+
+def set_bingo_square(sh, player: str, square_id: str, checked: bool):
+    ws = sh.worksheet("bingo")
+    df = read_tab("bingo")
+
+    target_row = None
+    if not df.empty:
+        match = df[(df["player"] == player) & (df["square_id"] == square_id)]
+        if not match.empty:
+            target_row = int(match.index[0]) + 2
+
+    row_values = [utc_iso(), player, square_id, "TRUE" if checked else "FALSE"]
+
+    if target_row:
+        ws.update(f"A{target_row}:D{target_row}", [row_values])
+    else:
+        ws.append_row(row_values)
+
+    st.cache_data.clear()
 # ----------------------------
 # GUESS SAVE (UPSERT-LIKE)
 # ----------------------------
@@ -276,6 +313,45 @@ def page_clue_wall(sh):
             if ts.strip():
                 st.caption(ts)
             st.write(text)
+
+def page_bingo(sh):
+    require_login()
+    player = st.session_state["player"]
+
+    st.title("🎯 Bingo Stamps")
+    st.caption("Stamp squares as you correctly identify who gave what during gift opening.")
+
+    state = get_bingo_state(player)
+
+    st.subheader("Your 3×3 card")
+    cols = st.columns(3)
+
+    for i, person in enumerate(BINGO_PEOPLE):
+        with cols[i % 3]:
+            checked = state.get(person, False)
+
+            new_val = st.checkbox(
+                person,
+                value=checked,
+                key=f"bingo_{player}_{person}"
+            )
+
+            # Only write if the user changed it
+            if new_val != checked:
+                set_bingo_square(sh, player, person, new_val)
+                st.rerun()
+
+    # Bingo detection (based on the order in BINGO_PEOPLE: row-major 3x3)
+    grid = [state.get(p, False) for p in BINGO_PEOPLE]
+    wins = [
+        (0,1,2),(3,4,5),(6,7,8),  # rows
+        (0,3,6),(1,4,7),(2,5,8),  # cols
+        (0,4,8),(2,4,6)           # diagonals
+    ]
+    if any(all(grid[a] for a in line) for line in wins):
+        st.success("🎉 BINGO!!!")
+        st.balloons()
+
 #ADMIN LOCK
 
 # ----------------------------
@@ -298,9 +374,11 @@ if st.sidebar.button("Log out"):
     st.session_state.clear()
     st.rerun()
 
-page = st.sidebar.radio("Go to", ["Guess Board", "Clue Wall", "Admin"], index=0)
+page = st.sidebar.radio("Go to", ["Guess Board", "Bingo", "Clue Wall", "Admin"], index=0)
 if page == "Guess Board":
     page_guess_board(sh)
+elif page == "Bingo":
+    page_bingo(sh)
 elif page == "Clue Wall":
     page_clue_wall(sh)
 else:
