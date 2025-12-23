@@ -33,6 +33,27 @@ def ws_df(sh, tab_name: str) -> pd.DataFrame:
 def utc_iso():
     return datetime.now(timezone.utc).isoformat()
 
+def set_state(sh, key: str, value: str):
+    """Set app_state[key] = value (TRUE/FALSE). Creates row if missing."""
+    ws = sh.worksheet("app_state")
+    rows = ws.get_all_records()
+
+    # Find the row with this key (row index in sheet = i+2)
+    target_row = None
+    for i, r in enumerate(rows, start=2):
+        if str(r.get("key", "")).strip().lower() == key.lower():
+            target_row = i
+            break
+
+    if target_row:
+        ws.update(f"B{target_row}", [[value]])
+    else:
+        ws.append_row([key, value])
+
+def toggle_locked(sh):
+    new_val = "FALSE" if is_locked(sh) else "TRUE"
+    set_state(sh, "locked", new_val)
+    return new_val
 # ----------------------------
 # APP STATE (LOCK)
 # ----------------------------
@@ -156,11 +177,32 @@ def page_guess_board(sh):
         show_cols = [c for c in ["timestamp", "giver_guess", "receiver_guess", "confidence", "reason"] if c in mine.columns]
         st.dataframe(mine[show_cols], hide_index=True, use_container_width=True)
 
+def page_admin(sh):
+    require_login()
+    st.title("🔒 Admin")
+
+    admin_code = st.text_input("Admin code", type="password", help="Only the host should have this.")
+    if admin_code != st.secrets.get("ADMIN_CODE", ""):
+        st.info("Enter the admin code to unlock admin controls.")
+        return
+
+    locked_now = is_locked(sh)
+    st.write(f"Current lock status: **{'LOCKED 🔒' if locked_now else 'UNLOCKED ✅'}**")
+
+    if st.button("Toggle Lock"):
+        new_val = toggle_locked(sh)
+        st.success(f"Locked set to {new_val}")
+        st.rerun()
+
+    st.divider()
+    st.caption("When locked is TRUE, nobody can save or edit guesses.")
+
 def page_home(sh):
     st.title("🎄 Secret Santa Detective")
     st.write("Pick a page on the left to start.")
     st.write("Current status:")
     st.write(f"- Locked: **{is_locked(sh)}**")
+#ADMIN LOCK
 
 # ----------------------------
 # MAIN
@@ -181,6 +223,14 @@ st.sidebar.success(f"Logged in as: {st.session_state['player']}")
 if st.sidebar.button("Log out"):
     st.session_state.clear()
     st.rerun()
+
+page = st.sidebar.radio("Go to", ["Guess Board", "Admin"], index=0)
+
+if page == "Guess Board":
+    page_guess_board(sh)
+else:
+    page_admin(sh)
+
 
 page = st.sidebar.radio("Go to", ["Guess Board"], index=0)
 if page == "Guess Board":
