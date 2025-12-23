@@ -10,6 +10,49 @@ from datetime import datetime, timezone
 st.set_page_config(page_title="Secret Santa Detective", page_icon="🎄", layout="wide")
 SHEET_NAME = "secret-santa-data"  # your exact sheet title
 
+st.markdown("""
+<style>
+.bingo-header{
+  display:flex; gap:10px; justify-content:center; margin: 8px 0 16px 0;
+}
+.bingo-header span{
+  width:54px; height:54px; display:flex; align-items:center; justify-content:center;
+  border-radius:14px; border:2px solid rgba(255,255,255,0.18);
+  font-weight:900; font-size:26px;
+}
+.bingo-card{
+  max-width: 880px; margin: 0 auto;
+  padding: 18px; border-radius: 22px;
+  border:1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.03);
+}
+.square{
+  border-radius: 18px;
+  border:1px solid rgba(255,255,255,0.18);
+  padding: 14px 12px;
+  min-height: 120px;
+  display:flex; flex-direction:column; justify-content:space-between;
+}
+.square.stamped{
+  border:2px solid rgba(80,200,120,0.65);
+  background: rgba(80,200,120,0.08);
+}
+.square .label{
+  font-weight:800;
+  font-size: 18px;
+  line-height: 1.2;
+}
+.square .status{
+  opacity: .85;
+  font-size: 14px;
+  margin-top: 10px;
+}
+.small-note{
+  opacity: .7;
+  font-size: 12px;
+}
+</style>
+""", unsafe_allow_html=True)
 # ----------------------------
 # SHEETS CONNECT
 # ----------------------------
@@ -318,40 +361,62 @@ def page_bingo(sh):
     require_login()
     player = st.session_state["player"]
 
-    st.title("🎯 Bingo Stamps")
-    st.caption("Stamp squares as you correctly identify who gave what during gift opening.")
+    st.title("🎯 Bingo")
+    st.caption("Stamp squares as you figure things out during gift opening.")
+
+    # header B I N G O
+    st.markdown("""
+    <div class="bingo-header">
+      <span>B</span><span>I</span><span>N</span><span>G</span><span>O</span>
+    </div>
+    """, unsafe_allow_html=True)
 
     state = get_bingo_state(player)
 
-    st.subheader("Your 3×3 card")
-    cols = st.columns(3)
+    st.markdown('<div class="bingo-card">', unsafe_allow_html=True)
 
-    for i, person in enumerate(BINGO_PEOPLE):
-        with cols[i % 3]:
-            checked = state.get(person, False)
+    # 3x3 grid (row-major)
+    for r in range(3):
+        cols = st.columns(3)
+        for c in range(3):
+            idx = r*3 + c
+            person = BINGO_PEOPLE[idx]
+            stamped = state.get(person, False)
 
-            new_val = st.checkbox(
-                person,
-                value=checked,
-                key=f"bingo_{player}_{person}"
-            )
+            with cols[c]:
+                # Square “card” look
+                cls = "square stamped" if stamped else "square"
+                st.markdown(
+                    f"""
+                    <div class="{cls}">
+                      <div>
+                        <div class="label">{person}</div>
+                        <div class="status">{'✅ STAMPED' if stamped else '⬜ not yet'}</div>
+                      </div>
+                      <div class="small-note">Tap below to toggle</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
 
-            # Only write if the user changed it
-            if new_val != checked:
-                set_bingo_square(sh, player, person, new_val)
-                st.rerun()
+                # Button stamp (real interaction)
+                btn_label = "Unstamp" if stamped else "Stamp"
+                if st.button(btn_label, key=f"stamp_{player}_{person}", use_container_width=True):
+                    set_bingo_square(sh, player, person, not stamped)
+                    st.rerun()
 
-    # Bingo detection (based on the order in BINGO_PEOPLE: row-major 3x3)
-    grid = [state.get(p, False) for p in BINGO_PEOPLE]
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Bingo detection
+    current = [get_bingo_state(player).get(p, False) for p in BINGO_PEOPLE]
     wins = [
-        (0,1,2),(3,4,5),(6,7,8),  # rows
-        (0,3,6),(1,4,7),(2,5,8),  # cols
-        (0,4,8),(2,4,6)           # diagonals
+        (0,1,2),(3,4,5),(6,7,8),
+        (0,3,6),(1,4,7),(2,5,8),
+        (0,4,8),(2,4,6),
     ]
-    if any(all(grid[a] for a in line) for line in wins):
+    if any(all(current[i] for i in line) for line in wins):
         st.success("🎉 BINGO!!!")
         st.balloons()
-
 #ADMIN LOCK
 
 # ----------------------------
