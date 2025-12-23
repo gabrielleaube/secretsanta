@@ -234,7 +234,7 @@ def page_clue_wall(sh):
         with col1:
             anonymous = st.checkbox("Post anonymous", value=False)
         with col2:
-            content = st.text_input("Your clue / theory", placeholder="Clue: My Santa definitely owns a Stanley cup.")
+            content = st.text_input("Your clue / theory", placeholder="Clue: My santa secret loves shrimp")
 
         submitted = st.form_submit_button("Post")
         if submitted:
