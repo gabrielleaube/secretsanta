@@ -94,13 +94,14 @@ def is_locked() -> bool:
 def login_panel(sh):
     st.sidebar.header("🔐 Login")
     players = read_tab("players")
+
     if players.empty:
         st.sidebar.error("Your 'players' tab is empty.")
         return
 
     names = players["name"].tolist()
-    anonymous = st.checkbox("Post anonymous", value=False, key="post_anon")
-    content = st.text_input("Your clue / theory", placeholder="Clue: My santa secret loves shrimp", key="post_content")
+    name = st.sidebar.selectbox("Your name", names, key="login_name")
+    code = st.sidebar.text_input("Passcode", type="password", key="login_code")
 
     if st.sidebar.button("Log in"):
         ok = not players[(players["name"] == name) & (players["passcode"] == code)].empty
@@ -240,9 +241,9 @@ def page_clue_wall(sh):
     with st.form("post_form", clear_on_submit=True):
         col1, col2 = st.columns([1, 3])
         with col1:
-            anonymous = st.checkbox("Post anonymous", value=False)
+            anonymous = st.checkbox("Post anonymous", value=False, key="clue_anon")
         with col2:
-            content = st.text_input("Your clue / theory", placeholder="Clue: My santa secret loves shrimp")
+            content = st.text_input("Your clue / theory", placeholder="Clue: My santa secret loves shrimp", key="clue_text")
 
         submitted = st.form_submit_button("Post")
         if submitted:
