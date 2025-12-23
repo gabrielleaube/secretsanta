@@ -13,6 +13,11 @@ SHEET_NAME = "secret-santa-data"  # your exact sheet title
 # ----------------------------
 # SHEETS CONNECT
 # ----------------------------
+@st.cache_data(ttl=15)  # cache for 15 seconds
+def read_tab(sh, tab_name: str) -> pd.DataFrame:
+    ws = sh.worksheet(tab_name)
+    return pd.DataFrame(ws.get_all_records())
+    
 @st.cache_resource
 def open_sheet():
     scopes = [
@@ -60,7 +65,7 @@ def add_post(sh, player: str, content: str):
     ws.append_row([utc_iso(), player, content])
 
 def get_posts(sh, limit: int = 100) -> pd.DataFrame:
-    df = ws_df(sh, "posts")
+    df = read_tab(sh,"posts")
     if df.empty:
         return df
     # newest first if timestamp exists
