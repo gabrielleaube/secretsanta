@@ -13,11 +13,6 @@ SHEET_NAME = "secret-santa-data"  # your exact sheet title
 # ----------------------------
 # SHEETS CONNECT
 # ----------------------------
-@st.cache_data(ttl=15)  # cache for 15 seconds
-def read_tab(sh, tab_name: str) -> pd.DataFrame:
-    ws = sh.worksheet(tab_name)
-    return pd.DataFrame(ws.get_all_records())
-    
 @st.cache_resource
 def open_sheet():
     scopes = [
@@ -31,10 +26,11 @@ def open_sheet():
     client = gspread.authorize(creds)
     return client.open(SHEET_NAME)
 
-def ws_df(sh, tab_name: str) -> pd.DataFrame:
+@st.cache_data(ttl=15)  # cache for 15 seconds
+def read_tab(sh, tab_name: str) -> pd.DataFrame:
     ws = sh.worksheet(tab_name)
     return pd.DataFrame(ws.get_all_records())
-
+    
 def utc_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -52,9 +48,10 @@ def set_state(sh, key: str, value: str):
 
     if target_row:
         ws.update(f"B{target_row}", [[value]])
+        st.cache_data.clear()
     else:
         ws.append_row([key, value])
-
+        st.cache_data.clear()
 def toggle_locked(sh):
     new_val = "FALSE" if is_locked(sh) else "TRUE"
     set_state(sh, "locked", new_val)
@@ -63,7 +60,8 @@ def toggle_locked(sh):
 def add_post(sh, player: str, content: str):
     ws = sh.worksheet("posts")
     ws.append_row([utc_iso(), player, content])
-
+    st.cache_data.clear()
+    
 def get_posts(sh, limit: int = 100) -> pd.DataFrame:
     df = read_tab(sh,"posts")
     if df.empty:
@@ -76,6 +74,7 @@ def get_posts(sh, limit: int = 100) -> pd.DataFrame:
 # ----------------------------
 # APP STATE (LOCK)
 # ----------------------------
+@st.cache_data(ttl=10)
 def get_state(sh, key: str, default="FALSE") -> str:
     ws = sh.worksheet("app_state")
     rows = ws.get_all_records()
@@ -92,7 +91,7 @@ def is_locked(sh) -> bool:
 # ----------------------------
 def login_panel(sh):
     st.sidebar.header("🔐 Login")
-    players = ws_df(sh, "players")
+    players = read_tab(sh, "players")
     if players.empty:
         st.sidebar.error("Your 'players' tab is empty.")
         return
@@ -138,11 +137,13 @@ def upsert_guess(sh, player: str, giver_guess: str, receiver_guess: str, confide
     if target_row:
         # update the whole row A:F
         ws.update(f"A{target_row}:F{target_row}", [row_values])
+        st.cache_data.clear()
     else:
         ws.append_row(row_values)
+        st.cache_data.clear()
 
 def get_my_guesses(sh, player: str) -> pd.DataFrame:
-    df = ws_df(sh, "guesses")
+    df = read_tab(sh, "guesses")
     if df.empty:
         return df
     df = df[df["player"] == player].copy()
@@ -185,30 +186,32 @@ def page_guess_board(sh):
     player = st.session_state["player"]
 
     locked = is_locked(sh)
-    st.title("🎁 Guess Board")
+    st.title("🎁 Guess Board 🎁 ")
     if locked:
         st.error("Guesses are LOCKED 🔒 (no more edits)")
     else:
         st.caption("Submit your guesses. You can edit until the host locks the game.")
 
-    players_df = ws_df(sh, "players")
+    players_df = read_tab(sh, "players")
     names = players_df["name"].tolist()
 
     st.subheader("Make a guess")
-    col1, col2, col3 = st.columns([1, 1, 1])
+    with st.form("guess_form"):
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            giver_guess = st.selectbox("I think the Secret Santa is…", names, index=0, disabled=locked)
+        with col2:
+            receiver_guess = st.selectbox("…for this person:", names, index=0, disabled=locked)
+        with col3:
+            confidence = st.slider("Confidence", 1, 5, 3, disabled=locked)
 
-    with col1:
-        giver_guess = st.selectbox("I think the Secret Santa is…", names, index=0, disabled=locked)
-    with col2:
-        receiver_guess = st.selectbox("…for this person:", names, index=0, disabled=locked)
-    with col3:
-        confidence = st.slider("Confidence", 1, 5, 3, disabled=locked)
+        reason = st.text_input("Reason (optional)", placeholder="e.g., They were being suspicious at dinner", disabled=locked)
 
-    reason = st.text_input("Reason (optional)", placeholder="e.g., They were being suspicious at dinner", disabled=locked)
-
-    if st.button("Save / Update Guess", disabled=locked):
+        submitted = st.form_submit_button("Save / Update Guess", disabled=locked)
+    
+    if submitted: 
         if giver_guess == receiver_guess:
-            st.warning("That guess is… chaotic. You can do it, but are you sure? 😭")
+            st.warning("That guess is interesting... You can do it, but are you sure? 😭")
         upsert_guess(sh, player, giver_guess, receiver_guess, confidence, reason)
         st.success("Saved ✅")
         st.rerun()
