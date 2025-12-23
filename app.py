@@ -54,6 +54,20 @@ def toggle_locked(sh):
     new_val = "FALSE" if is_locked(sh) else "TRUE"
     set_state(sh, "locked", new_val)
     return new_val
+
+def add_post(sh, player: str, content: str):
+    ws = sh.worksheet("posts")
+    ws.append_row([utc_iso(), player, content])
+
+def get_posts(sh, limit: int = 100) -> pd.DataFrame:
+    df = ws_df(sh, "posts")
+    if df.empty:
+        return df
+    # newest first if timestamp exists
+    if "timestamp" in df.columns:
+        df = df.sort_values("timestamp", ascending=False)
+    return df.head(limit)
+    
 # ----------------------------
 # APP STATE (LOCK)
 # ----------------------------
@@ -135,6 +149,32 @@ def get_my_guesses(sh, player: str) -> pd.DataFrame:
 # ----------------------------
 # UI PAGES
 # ----------------------------
+def page_home(sh):
+    st.title("🎄 Secret Santa Detective")
+    st.write("Pick a page on the left to start.")
+    st.write("Current status:")
+    st.write(f"- Locked: **{is_locked(sh)}**")
+
+def page_admin(sh):
+    require_login()
+    st.title("🔒 Admin")
+
+    admin_code = st.text_input("Admin code", type="password", help="Only the host should have this.")
+    if admin_code != st.secrets.get("ADMIN_CODE", ""):
+        st.info("Enter the admin code to unlock admin controls.")
+        return
+
+    locked_now = is_locked(sh)
+    st.write(f"Current lock status: **{'LOCKED 🔒' if locked_now else 'UNLOCKED ✅'}**")
+
+    if st.button("Toggle Lock"):
+        new_val = toggle_locked(sh)
+        st.success(f"Locked set to {new_val}")
+        st.rerun()
+
+    st.divider()
+    st.caption("When locked is TRUE, nobody can save or edit guesses.")
+
 def page_guess_board(sh):
     require_login()
     player = st.session_state["player"]
@@ -177,31 +217,56 @@ def page_guess_board(sh):
         show_cols = [c for c in ["timestamp", "giver_guess", "receiver_guess", "confidence", "reason"] if c in mine.columns]
         st.dataframe(mine[show_cols], hide_index=True, use_container_width=True)
 
-def page_admin(sh):
+
+def page_clue_wall(sh):
     require_login()
-    st.title("🔒 Admin")
+    player = st.session_state["player"]
 
-    admin_code = st.text_input("Admin code", type="password", help="Only the host should have this.")
-    if admin_code != st.secrets.get("ADMIN_CODE", ""):
-        st.info("Enter the admin code to unlock admin controls.")
-        return
+    st.title("🕵️ Clue Wall")
+    st.caption("Drop clues, theories, and chaotic accusations. Keep it fun 😈")
 
-    locked_now = is_locked(sh)
-    st.write(f"Current lock status: **{'LOCKED 🔒' if locked_now else 'UNLOCKED ✅'}**")
+    locked = is_locked(sh)
+    if locked:
+        st.warning("Guesses are locked, but you can still post clues.")
 
-    if st.button("Toggle Lock"):
-        new_val = toggle_locked(sh)
-        st.success(f"Locked set to {new_val}")
-        st.rerun()
+    with st.form("post_form", clear_on_submit=True):
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            anonymous = st.checkbox("Post anonymous", value=False)
+        with col2:
+            content = st.text_input("Your clue / theory", placeholder="Clue: My Santa definitely owns a Stanley cup.")
+
+        submitted = st.form_submit_button("Post")
+        if submitted:
+            text = (content or "").strip()
+            if len(text) < 3:
+                st.error("Make it at least 3 characters.")
+            else:
+                author = "Anonymous" if anonymous else player
+                add_post(sh, author, text)
+                st.success("Posted ✅")
+                st.rerun()
 
     st.divider()
-    st.caption("When locked is TRUE, nobody can save or edit guesses.")
 
-def page_home(sh):
-    st.title("🎄 Secret Santa Detective")
-    st.write("Pick a page on the left to start.")
-    st.write("Current status:")
-    st.write(f"- Locked: **{is_locked(sh)}**")
+    st.subheader("Feed")
+    posts = get_posts(sh, limit=200)
+
+    if posts.empty:
+        st.write("No posts yet. Start the chaos 👀")
+        return
+
+    # Pretty feed cards
+    for _, row in posts.iterrows():
+        ts = str(row.get("timestamp", "")).replace("T", " ").replace("+00:00", " UTC")
+        who = row.get("player", "Unknown")
+        text = row.get("content", "")
+
+        with st.container(border=True):
+            st.write(f"**{who}**")
+            if ts.strip():
+                st.caption(ts)
+            st.write(text)
 #ADMIN LOCK
 
 # ----------------------------
@@ -224,14 +289,10 @@ if st.sidebar.button("Log out"):
     st.session_state.clear()
     st.rerun()
 
-page = st.sidebar.radio("Go to", ["Guess Board", "Admin"], index=0)
-
+page = st.sidebar.radio("Go to", ["Guess Board", "Clue Wall", "Admin"], index=0)
 if page == "Guess Board":
     page_guess_board(sh)
+elif page == "Clue Wall":
+    page_clue_wall(sh)
 else:
     page_admin(sh)
-
-
-page = st.sidebar.radio("Go to", ["Guess Board"], index=0)
-if page == "Guess Board":
-    page_guess_board(sh)
